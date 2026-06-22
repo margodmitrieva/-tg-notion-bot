@@ -5,32 +5,61 @@ import threading
 import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
-from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
+from telegram.ext import Application, MessageHandler, filters, ContextTypes
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 NOTION_TOKEN = os.environ["NOTION_TOKEN"]
 NOTION_DATABASE_ID = os.environ["NOTION_DATABASE_ID"]
+NOTION_PERSONAL_DATABASE_ID = os.environ["NOTION_PERSONAL_DATABASE_ID"]
 ALLOWED_CHAT_ID = int(os.environ["ALLOWED_CHAT_ID"])
 PORT = int(os.environ.get("PORT", 8080))
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """Ты ассистент, который управляет задачами в Notion для команды Марго.
-Команда: Марго, Галия, Ольга, Андрей.
-Направления: АЭлит, Контент, Фокус-группа, Общее.
-Приоритеты: 🔥 Срочно, ⚡ Важно, 📌 Обычное.
+SYSTEM_PROMPT = """Ты ассистент, который управляет задачами в Notion для Марго.
+
+РАБОЧИЕ задачи:
+- Команда: Марго, Галия, Ольга, Андрей
+- Направления: АЭлит, Контент, Фокус-группа, Общее
+
+ЛИЧНЫЕ задачи:
+- Ответственный: Марго
+- Разделы: Цели и приоритеты, Семья и быт, Обучение
+
+Приоритеты: 🔥 Срочно, ⚡ Важно, 📌 Обычное
 
 Определи тип сообщения и ответь ТОЛЬКО JSON без markdown:
 
-1. Если сообщение про ВЫПОЛНЕНИЕ задачи:
+1. Показать ВСЕ рабочие задачи (все задачи, покажи задачи, что в работе):
+{"type": "show_all"}
+
+2. Рабочие задачи конкретного ЧЕЛОВЕКА (задачи Ольги, что у Марго):
+{"type": "show_person", "person": "имя"}
+
+3. Рабочие задачи по НАПРАВЛЕНИЮ (задачи по АЭлит, что по Контенту):
+{"type": "show_direction", "direction": "АЭлит или Контент или Фокус-группа или Общее"}
+
+4. Рабочие задачи ЧЕЛОВЕКА по НАПРАВЛЕНИЮ (задачи Марго АЭлит, Ольга Контент):
+{"type": "show_person_direction", "person": "имя", "direction": "направление"}
+
+5. Показать ВСЕ личные задачи (мои задачи, личные задачи, что у меня):
+{"type": "show_personal_all"}
+
+6. Личные задачи по РАЗДЕЛУ (цели, семья, обучение, мои цели, моя семья):
+{"type": "show_personal_section", "section": "Цели и приоритеты или Семья и быт или Обучение"}
+
+7. ВЫПОЛНЕНИЕ рабочей задачи (выполнила, сделала, готово — про рабочее):
 {"type": "done", "task_name": "название", "responsible": "имя", "status": "Готово"}
 
-2. Если сообщение про НОВУЮ задачу (слова: задача, добавь, нужно сделать, поставь задачу):
-{"type": "new", "task_name": "название задачи", "responsible": "имя или Марго", "direction": "АЭлит или Контент или Фокус-группа или Общее", "priority": "🔥 Срочно или ⚡ Важно или 📌 Обычное"}
+8. НОВАЯ рабочая задача (задача для команды, добавь задачу Ольге, нужно сделать по АЭлит):
+{"type": "new", "task_name": "название", "responsible": "имя или Марго", "direction": "направление", "priority": "приоритет"}
 
-3. Если сообщение НЕ про задачи:
+9. НОВАЯ личная задача (моя задача, добавь в цели, напомни купить, личное):
+{"type": "new_personal", "task_name": "название", "section": "Цели и приоритеты или Семья и быт или Обучение", "priority": "приоритет"}
+
+10. НЕ про задачи:
 {"type": "skip"}"""
 
 
@@ -59,92 +88,162 @@ def ask_claude(text, sender):
     return json.loads(r.json()["content"][0]["text"].strip())
 
 
-def query_notion(filters_body):
-    """Универсальный запрос к Notion"""
+def query_notion(database_id, body):
     r = requests.post(
-        f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query",
+        f"https://api.notion.com/v1/databases/{database_id}/query",
         headers={"Authorization": f"Bearer {NOTION_TOKEN}", "Notion-Version": "2022-06-28", "Content-Type": "application/json"},
-        json=filters_body,
-        timeout=15
+        json=body, timeout=15
     )
     r.raise_for_status()
     return r.json().get("results", [])
 
 
-def get_tasks_in_progress():
-    return query_notion({
+# --- Рабочие задачи ---
+def get_all_tasks():
+    return query_notion(NOTION_DATABASE_ID, {
         "filter": {"property": "Статус", "select": {"equals": "В работе"}},
         "sorts": [{"property": "Направление", "direction": "ascending"}, {"property": "Ответственный", "direction": "ascending"}]
     })
 
-
 def get_tasks_by_person(name):
-    """Задачи конкретного человека в работе"""
-    return query_notion({
-        "filter": {
-            "and": [
-                {"property": "Статус", "select": {"equals": "В работе"}},
-                {"property": "Ответственный", "select": {"equals": name}}
-            ]
-        },
+    return query_notion(NOTION_DATABASE_ID, {
+        "filter": {"and": [
+            {"property": "Статус", "select": {"equals": "В работе"}},
+            {"property": "Ответственный", "select": {"equals": name}}
+        ]},
+        "sorts": [{"property": "Приоритет", "direction": "ascending"}]
+    })
+
+def get_tasks_by_direction(direction):
+    return query_notion(NOTION_DATABASE_ID, {
+        "filter": {"and": [
+            {"property": "Статус", "select": {"equals": "В работе"}},
+            {"property": "Направление", "select": {"equals": direction}}
+        ]},
+        "sorts": [{"property": "Ответственный", "direction": "ascending"}]
+    })
+
+def get_tasks_by_person_direction(name, direction):
+    return query_notion(NOTION_DATABASE_ID, {
+        "filter": {"and": [
+            {"property": "Статус", "select": {"equals": "В работе"}},
+            {"property": "Ответственный", "select": {"equals": name}},
+            {"property": "Направление", "select": {"equals": direction}}
+        ]},
+        "sorts": [{"property": "Приоритет", "direction": "ascending"}]
+    })
+
+# --- Личные задачи ---
+def get_personal_all():
+    return query_notion(NOTION_PERSONAL_DATABASE_ID, {
+        "filter": {"property": "Статус", "select": {"equals": "В работе"}},
+        "sorts": [{"property": "Раздел", "direction": "ascending"}, {"property": "Приоритет", "direction": "ascending"}]
+    })
+
+def get_personal_by_section(section):
+    return query_notion(NOTION_PERSONAL_DATABASE_ID, {
+        "filter": {"and": [
+            {"property": "Статус", "select": {"equals": "В работе"}},
+            {"property": "Раздел", "select": {"equals": section}}
+        ]},
         "sorts": [{"property": "Приоритет", "direction": "ascending"}]
     })
 
 
-def parse_task(task):
-    """Разбираем задачу из Notion в словарь"""
+def parse_work_task(task):
     props = task["properties"]
-    name = ""
-    if props.get("Задача", {}).get("title"):
-        name = props["Задача"]["title"][0]["text"]["content"]
-    responsible = props.get("Ответственный", {}).get("select", {})
-    responsible = responsible.get("name", "—") if responsible else "—"
-    direction = props.get("Направление", {}).get("select", {})
-    direction = direction.get("name", "Общее") if direction else "Общее"
-    priority = props.get("Приоритет", {}).get("select", {})
-    priority = priority.get("name", "") if priority else ""
-    deadline = props.get("Дедлайн", {}).get("date", {})
-    deadline = deadline.get("start", "") if deadline else ""
+    name = props.get("Задача", {}).get("title", [{}])
+    name = name[0]["text"]["content"] if name else ""
+    responsible = (props.get("Ответственный", {}).get("select") or {}).get("name", "—")
+    direction = (props.get("Направление", {}).get("select") or {}).get("name", "Общее")
+    priority = (props.get("Приоритет", {}).get("select") or {}).get("name", "")
+    deadline = (props.get("Дедлайн", {}).get("date") or {}).get("start", "")
     priority_icon = "🔥" if "Срочно" in priority else "⚡" if "Важно" in priority else "📌"
     return {"name": name, "responsible": responsible, "direction": direction, "priority_icon": priority_icon, "deadline": deadline}
 
+def parse_personal_task(task):
+    props = task["properties"]
+    name = props.get("Задача", {}).get("title", [{}])
+    name = name[0]["text"]["content"] if name else ""
+    section = (props.get("Раздел", {}).get("select") or {}).get("name", "Общее")
+    priority = (props.get("Приоритет", {}).get("select") or {}).get("name", "")
+    deadline = (props.get("Дедлайн", {}).get("date") or {}).get("start", "")
+    priority_icon = "🔥" if "Срочно" in priority else "⚡" if "Важно" in priority else "📌"
+    return {"name": name, "section": section, "priority_icon": priority_icon, "deadline": deadline}
 
-def format_tasks(tasks):
-    """Форматируем список задач по направлениям"""
+
+DIR_ICONS = {"АЭлит": "🏭", "Контент": "📱", "Фокус-группа": "🎓", "Общее": "📋"}
+PERSON_ICONS = {"Марго": "👩‍💼", "Галия": "👩‍💻", "Ольга": "👩‍📋", "Андрей": "👨‍🔧"}
+SECTION_ICONS = {"Цели и приоритеты": "🎯", "Семья и быт": "🧡", "Обучение": "📚"}
+
+
+def format_all(tasks):
     if not tasks:
-        return "✅ Нет задач в работе!"
-    by_direction = {}
+        return "✅ Нет рабочих задач в работе!"
+    by_dir = {}
     for task in tasks:
-        t = parse_task(task)
-        if t["direction"] not in by_direction:
-            by_direction[t["direction"]] = []
-        by_direction[t["direction"]].append(t)
-    direction_icons = {"АЭлит": "🏭", "Контент": "📱", "Фокус-группа": "🎓", "Общее": "📋"}
-    lines = ["📋 *Задачи в работе*\n"]
-    for direction, items in by_direction.items():
-        icon = direction_icons.get(direction, "📁")
-        lines.append(f"{icon} *{direction}*")
+        t = parse_work_task(task)
+        by_dir.setdefault(t["direction"], []).append(t)
+    lines = ["📋 *Все рабочие задачи*\n"]
+    for direction, items in by_dir.items():
+        lines.append(f"{DIR_ICONS.get(direction, '📁')} *{direction}*")
         for t in items:
-            deadline_str = f" · {t['deadline']}" if t['deadline'] else ""
-            lines.append(f"{t['priority_icon']} {t['name']}\n   👤 {t['responsible']}{deadline_str}")
+            dl = f" · {t['deadline']}" if t['deadline'] else ""
+            lines.append(f"{t['priority_icon']} {t['name']}\n   👤 {t['responsible']}{dl}")
         lines.append("")
     lines.append(f"_Всего: {len(tasks)}_")
     return "\n".join(lines)
 
-
-def format_tasks_by_person(tasks, name):
-    """Форматируем задачи конкретного человека"""
+def format_by_person(tasks, name):
+    icon = PERSON_ICONS.get(name, "👤")
     if not tasks:
         return f"✅ У {name} нет задач в работе!"
-    person_icons = {"Марго": "👩‍💼", "Галия": "👩‍💻", "Ольга": "👩‍📋", "Андрей": "👨‍🔧"}
-    icon = person_icons.get(name, "👤")
-    lines = [f"{icon} *Задачи {name}*\n"]
+    lines = [f"{icon} *Задачи — {name}*\n"]
     for task in tasks:
-        t = parse_task(task)
-        deadline_str = f" · {t['deadline']}" if t['deadline'] else ""
-        direction_icons = {"АЭлит": "🏭", "Контент": "📱", "Фокус-группа": "🎓", "Общее": "📋"}
-        dir_icon = direction_icons.get(t["direction"], "📁")
-        lines.append(f"{t['priority_icon']} {t['name']}\n   {dir_icon} {t['direction']}{deadline_str}")
+        t = parse_work_task(task)
+        dl = f" · {t['deadline']}" if t['deadline'] else ""
+        lines.append(f"{t['priority_icon']} {t['name']}\n   {DIR_ICONS.get(t['direction'], '📁')} {t['direction']}{dl}")
+    lines.append(f"\n_Всего: {len(tasks)}_")
+    return "\n".join(lines)
+
+def format_by_direction(tasks, direction):
+    icon = DIR_ICONS.get(direction, "📁")
+    if not tasks:
+        return f"✅ Нет задач по направлению {icon} {direction}!"
+    lines = [f"{icon} *Задачи — {direction}*\n"]
+    for task in tasks:
+        t = parse_work_task(task)
+        dl = f" · {t['deadline']}" if t['deadline'] else ""
+        lines.append(f"{t['priority_icon']} {t['name']}\n   👤 {t['responsible']}{dl}")
+    lines.append(f"\n_Всего: {len(tasks)}_")
+    return "\n".join(lines)
+
+def format_personal_all(tasks):
+    if not tasks:
+        return "✅ Нет личных задач в работе!"
+    by_section = {}
+    for task in tasks:
+        t = parse_personal_task(task)
+        by_section.setdefault(t["section"], []).append(t)
+    lines = ["🌸 *Мои личные задачи*\n"]
+    for section, items in by_section.items():
+        lines.append(f"{SECTION_ICONS.get(section, '📌')} *{section}*")
+        for t in items:
+            dl = f" · {t['deadline']}" if t['deadline'] else ""
+            lines.append(f"{t['priority_icon']} {t['name']}{dl}")
+        lines.append("")
+    lines.append(f"_Всего: {len(tasks)}_")
+    return "\n".join(lines)
+
+def format_personal_section(tasks, section):
+    icon = SECTION_ICONS.get(section, "📌")
+    if not tasks:
+        return f"✅ Нет задач в разделе {icon} {section}!"
+    lines = [f"{icon} *{section}*\n"]
+    for task in tasks:
+        t = parse_personal_task(task)
+        dl = f" · {t['deadline']}" if t['deadline'] else ""
+        lines.append(f"{t['priority_icon']} {t['name']}{dl}")
     lines.append(f"\n_Всего: {len(tasks)}_")
     return "\n".join(lines)
 
@@ -159,7 +258,6 @@ def find_task(name):
     results = r.json().get("results", [])
     return results[0]["id"] if results else None
 
-
 def update_task(page_id, status, responsible):
     r = requests.patch(
         f"https://api.notion.com/v1/pages/{page_id}",
@@ -169,9 +267,8 @@ def update_task(page_id, status, responsible):
     )
     return r.status_code == 200
 
-
-def create_task(name, responsible, direction="Общее", priority="📌 Обычное", status="В работе"):
-    r = requests.post(
+def create_work_task(name, responsible, direction="Общее", priority="📌 Обычное", status="В работе"):
+    requests.post(
         "https://api.notion.com/v1/pages",
         headers={"Authorization": f"Bearer {NOTION_TOKEN}", "Notion-Version": "2022-06-28", "Content-Type": "application/json"},
         json={"parent": {"database_id": NOTION_DATABASE_ID}, "properties": {
@@ -180,84 +277,21 @@ def create_task(name, responsible, direction="Общее", priority="📌 Обы
             "Ответственный": {"select": {"name": responsible}},
             "Направление": {"select": {"name": direction}},
             "Приоритет": {"select": {"name": priority}},
-        }},
-        timeout=15
+        }}, timeout=15
     )
-    return r.status_code == 200
 
-
-async def cmd_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.id != ALLOWED_CHAT_ID:
-        return
-    try:
-        await update.message.reply_text("⏳ Загружаю задачи...")
-        tasks = get_tasks_in_progress()
-        await update.message.reply_text(format_tasks(tasks), parse_mode="Markdown")
-    except Exception as e:
-        logger.error(f"Ошибка /tasks: {e}")
-        await update.message.reply_text("⚠️ Не удалось загрузить задачи.")
-
-
-async def cmd_who(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /who Имя — задачи конкретного человека"""
-    if update.effective_chat.id != ALLOWED_CHAT_ID:
-        return
-    if not context.args:
-        await update.message.reply_text(
-            "👤 Напиши имя после команды:\n"
-            "`/who Ольга`\n\n"
-            "Доступные имена: Марго, Галия, Ольга, Андрей",
-            parse_mode="Markdown"
-        )
-        return
-    name = context.args[0].strip().capitalize()
-    valid_names = ["Марго", "Галия", "Ольга", "Андрей"]
-    if name not in valid_names:
-        await update.message.reply_text(
-            f"❓ Не знаю такого человека. Доступные имена:\n{', '.join(valid_names)}"
-        )
-        return
-    try:
-        await update.message.reply_text(f"⏳ Загружаю задачи {name}...")
-        tasks = get_tasks_by_person(name)
-        await update.message.reply_text(format_tasks_by_person(tasks, name), parse_mode="Markdown")
-    except Exception as e:
-        logger.error(f"Ошибка /who: {e}")
-        await update.message.reply_text("⚠️ Не удалось загрузить задачи.")
-
-
-async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.id != ALLOWED_CHAT_ID:
-        return
-    if not context.args:
-        await update.message.reply_text(
-            "📝 Напиши задачу после команды:\n"
-            "`/add Позвонить дизайнеру — Ольга — АЭлит — срочно`",
-            parse_mode="Markdown"
-        )
-        return
-    text = " ".join(context.args)
-    sender = update.message.from_user.first_name or "Марго"
-    try:
-        result = ask_claude(f"Новая задача: {text}", sender)
-        if result.get("type") == "new":
-            name = result.get("task_name", text)
-            responsible = result.get("responsible", sender)
-            direction = result.get("direction", "Общее")
-            priority = result.get("priority", "📌 Обычное")
-            ok = create_task(name, responsible, direction, priority)
-            if ok:
-                await update.message.reply_text(
-                    f"✅ Задача добавлена!\n\n📌 *{name}*\n👤 {responsible} · {direction} · {priority}",
-                    parse_mode="Markdown"
-                )
-            else:
-                await update.message.reply_text("⚠️ Не удалось добавить задачу.")
-        else:
-            await update.message.reply_text("⚠️ Не поняла задачу. Попробуй написать подробнее.")
-    except Exception as e:
-        logger.error(f"Ошибка /add: {e}")
-        await update.message.reply_text("⚠️ Ошибка при добавлении задачи.")
+def create_personal_task(name, section="Цели и приоритеты", priority="📌 Обычное"):
+    requests.post(
+        "https://api.notion.com/v1/pages",
+        headers={"Authorization": f"Bearer {NOTION_TOKEN}", "Notion-Version": "2022-06-28", "Content-Type": "application/json"},
+        json={"parent": {"database_id": NOTION_PERSONAL_DATABASE_ID}, "properties": {
+            "Задача": {"title": [{"text": {"content": name}}]},
+            "Статус": {"select": {"name": "В работе"}},
+            "Ответственный": {"select": {"name": "Марго"}},
+            "Раздел": {"select": {"name": section}},
+            "Приоритет": {"select": {"name": priority}},
+        }}, timeout=15
+    )
 
 
 async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -267,12 +301,70 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg or not msg.text:
         return
     sender = msg.from_user.first_name or "Неизвестный"
+
     try:
         result = ask_claude(msg.text, sender)
-        msg_type = result.get("type")
-        if msg_type == "skip":
+        t = result.get("type")
+
+        if t == "skip":
             return
-        elif msg_type == "done":
+
+        elif t == "show_all":
+            await msg.reply_text("⏳ Загружаю...")
+            tasks = get_all_tasks()
+            await msg.reply_text(format_all(tasks), parse_mode="Markdown")
+
+        elif t == "show_person":
+            name = result.get("person", "").strip().capitalize()
+            if name not in ["Марго", "Галия", "Ольга", "Андрей"]:
+                await msg.reply_text("❓ Не знаю такого человека. Доступные: Марго, Галия, Ольга, Андрей")
+                return
+            await msg.reply_text(f"⏳ Загружаю задачи {name}...")
+            tasks = get_tasks_by_person(name)
+            await msg.reply_text(format_by_person(tasks, name), parse_mode="Markdown")
+
+        elif t == "show_direction":
+            direction = result.get("direction", "").strip()
+            if direction not in ["АЭлит", "Контент", "Фокус-группа", "Общее"]:
+                await msg.reply_text("❓ Доступные направления: АЭлит, Контент, Фокус-группа, Общее")
+                return
+            await msg.reply_text(f"⏳ Загружаю задачи по {direction}...")
+            tasks = get_tasks_by_direction(direction)
+            await msg.reply_text(format_by_direction(tasks, direction), parse_mode="Markdown")
+
+        elif t == "show_person_direction":
+            name = result.get("person", "").strip().capitalize()
+            direction = result.get("direction", "").strip()
+            await msg.reply_text(f"⏳ Загружаю задачи {name} по {direction}...")
+            tasks = get_tasks_by_person_direction(name, direction)
+            icon = PERSON_ICONS.get(name, "👤")
+            dir_icon = DIR_ICONS.get(direction, "📁")
+            if not tasks:
+                await msg.reply_text(f"✅ У {name} нет задач по направлению {direction}!")
+            else:
+                lines = [f"{icon} {dir_icon} *{name} — {direction}*\n"]
+                for task in tasks:
+                    t2 = parse_work_task(task)
+                    dl = f" · {t2['deadline']}" if t2['deadline'] else ""
+                    lines.append(f"{t2['priority_icon']} {t2['name']}{dl}")
+                lines.append(f"\n_Всего: {len(tasks)}_")
+                await msg.reply_text("\n".join(lines), parse_mode="Markdown")
+
+        elif t == "show_personal_all":
+            await msg.reply_text("⏳ Загружаю личные задачи...")
+            tasks = get_personal_all()
+            await msg.reply_text(format_personal_all(tasks), parse_mode="Markdown")
+
+        elif t == "show_personal_section":
+            section = result.get("section", "").strip()
+            if section not in ["Цели и приоритеты", "Семья и быт", "Обучение"]:
+                await msg.reply_text("❓ Доступные разделы: Цели и приоритеты, Семья и быт, Обучение")
+                return
+            await msg.reply_text(f"⏳ Загружаю...")
+            tasks = get_personal_by_section(section)
+            await msg.reply_text(format_personal_section(tasks, section), parse_mode="Markdown")
+
+        elif t == "done":
             name = result.get("task_name", "")
             responsible = result.get("responsible", sender)
             status = result.get("status", "Готово")
@@ -284,19 +376,31 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     await msg.reply_text("⚠️ Нашла задачу, но не смогла обновить.")
             else:
-                create_task(name, responsible, status=status)
+                create_work_task(name, responsible, status=status)
                 await msg.reply_text(f"✅ Зафиксировано! Создала «{name}» → {status}")
-        elif msg_type == "new":
+
+        elif t == "new":
             name = result.get("task_name", "")
             responsible = result.get("responsible", sender)
             direction = result.get("direction", "Общее")
             priority = result.get("priority", "📌 Обычное")
-            ok = create_task(name, responsible, direction, priority)
-            if ok:
-                await msg.reply_text(
-                    f"✅ Задача добавлена!\n\n📌 *{name}*\n👤 {responsible} · {direction} · {priority}",
-                    parse_mode="Markdown"
-                )
+            create_work_task(name, responsible, direction, priority)
+            await msg.reply_text(
+                f"✅ Задача добавлена!\n\n📌 *{name}*\n👤 {responsible} · {direction} · {priority}",
+                parse_mode="Markdown"
+            )
+
+        elif t == "new_personal":
+            name = result.get("task_name", "")
+            section = result.get("section", "Цели и приоритеты")
+            priority = result.get("priority", "📌 Обычное")
+            create_personal_task(name, section, priority)
+            icon = SECTION_ICONS.get(section, "📌")
+            await msg.reply_text(
+                f"✅ Личная задача добавлена!\n\n{icon} *{name}*\n{section} · {priority}",
+                parse_mode="Markdown"
+            )
+
     except Exception as e:
         logger.error(f"Ошибка: {e}")
 
@@ -305,10 +409,7 @@ def main():
     threading.Thread(target=start_web, daemon=True).start()
     logger.info(f"Веб-сервер на порту {PORT}")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("tasks", cmd_tasks))
-    app.add_handler(CommandHandler("who", cmd_who))
-    app.add_handler(CommandHandler("add", cmd_add))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
+    app.add_handler(MessageHandler(filters.TEXT, handle))
     logger.info("Бот запущен ✅")
     app.run_polling(drop_pending_updates=True)
 
