@@ -421,19 +421,15 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await msg.reply_text(f"✅ {''.join(title_parts[:-1])}* — нет задач!")
                 return
 
-            lines = [title + "
-"]
+            lines = [title, ""]
             for task in tasks:
                 t2 = parse_work_task(task)
                 dl = f" · {t2['deadline']}" if t2['deadline'] else ""
-                person_str = f"
-   👤 {t2['responsible']}" if not person else ""
+                person_str = f"\n   👤 {t2['responsible']}" if not person else ""
                 dir_str = f" · {DIR_ICONS.get(t2['direction'], '📁')} {t2['direction']}" if not direction else ""
                 lines.append(f"{icon} {t2['name']}{person_str}{dir_str}{dl}")
-            lines.append(f"
-_Всего: {len(tasks)}_")
-            await msg.reply_text("
-".join(lines), parse_mode="Markdown")
+            lines.append(f"\n_Всего: {len(tasks)}_")
+            await msg.reply_text("\n".join(lines), parse_mode="Markdown")
 
         elif t == "change_direction":
             task_name = result.get("task_name", "")
