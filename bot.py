@@ -59,13 +59,18 @@ SYSTEM_PROMPT = """Ты ассистент, который управляет з
 9. НОВАЯ личная задача (моя задача, добавь в цели, напомни купить, личное):
 {"type": "new_personal", "task_name": "название", "section": "Цели и приоритеты или Семья и быт или Обучение", "priority": "приоритет"}
 
-10. НЕ про задачи:
+10. ИЗМЕНИТЬ НАПРАВЛЕНИЕ задачи (перенеси, измени направление, переместить в, сменить на):
+{"type": "change_direction", "task_name": "название задачи", "new_direction": "АЭлит или Контент или Фокус-группа или Общее"}
+
+11. НЕ про задачи:
 {"type": "skip"}"""
 
 
 class KeepAlive(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", "2")
         self.end_headers()
         self.wfile.write(b"OK")
     def log_message(self, *args):
@@ -363,6 +368,29 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text(f"⏳ Загружаю...")
             tasks = get_personal_by_section(section)
             await msg.reply_text(format_personal_section(tasks, section), parse_mode="Markdown")
+
+        elif t == "change_direction":
+            task_name = result.get("task_name", "")
+            new_direction = result.get("new_direction", "")
+            valid_dirs = ["АЭлит", "Контент", "Фокус-группа", "Общее"]
+            if new_direction not in valid_dirs:
+                await msg.reply_text(f"❓ Не знаю такого направления. Доступные: {', '.join(valid_dirs)}")
+                return
+            page_id = find_task(task_name)
+            if page_id:
+                r = requests.patch(
+                    f"https://api.notion.com/v1/pages/{page_id}",
+                    headers={"Authorization": f"Bearer {NOTION_TOKEN}", "Notion-Version": "2022-06-28", "Content-Type": "application/json"},
+                    json={"properties": {"Направление": {"select": {"name": new_direction}}}},
+                    timeout=15
+                )
+                if r.status_code == 200:
+                    dir_icon = DIR_ICONS.get(new_direction, "📁")
+                    await msg.reply_text(f"✅ Готово! Задача «{task_name}» перенесена в {dir_icon} {new_direction}")
+                else:
+                    await msg.reply_text("⚠️ Не смогла обновить направление.")
+            else:
+                await msg.reply_text(f"❓ Не нашла задачу «{task_name}». Проверь название.")
 
         elif t == "done":
             name = result.get("task_name", "")
