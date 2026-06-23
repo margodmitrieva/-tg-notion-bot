@@ -62,7 +62,10 @@ SYSTEM_PROMPT = """Ты ассистент, который управляет з
 10. ИЗМЕНИТЬ НАПРАВЛЕНИЕ задачи (перенеси, измени направление, переместить в, сменить на):
 {"type": "change_direction", "task_name": "название задачи", "new_direction": "АЭлит или Контент или Фокус-группа или Общее"}
 
-11. НЕ про задачи:
+11. Показать задачи по ПРИОРИТЕТУ (срочные, важные, обычные — можно с фильтром по человеку и/или направлению):
+{"type": "show_priority", "priority": "🔥 Срочно или ⚡ Важно или 📌 Обычное", "person": "имя или null", "direction": "направление или null"}
+
+12. НЕ про задачи:
 {"type": "skip"}"""
 
 
@@ -368,6 +371,69 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text(f"⏳ Загружаю...")
             tasks = get_personal_by_section(section)
             await msg.reply_text(format_personal_section(tasks, section), parse_mode="Markdown")
+
+        elif t == "show_priority":
+            priority_map = {
+                "🔥 Срочно": "🔥 Срочно",
+                "⚡ Важно": "⚡ Важно",
+                "📌 Обычное": "📌 Обычное"
+            }
+            priority = result.get("priority", "").strip()
+            person = result.get("person")
+            direction = result.get("direction")
+            if not person or person == "null":
+                person = None
+            if not direction or direction == "null":
+                direction = None
+
+            if priority not in priority_map:
+                await msg.reply_text("❓ Не поняла приоритет. Доступные: срочные, важные, обычные")
+                return
+
+            # Строим фильтр
+            filters = [
+                {"property": "Статус", "select": {"equals": "В работе"}},
+                {"property": "Приоритет", "select": {"equals": priority}}
+            ]
+            if person:
+                filters.append({"property": "Ответственный", "select": {"equals": person}})
+            if direction:
+                filters.append({"property": "Направление", "select": {"equals": direction}})
+
+            await msg.reply_text("⏳ Загружаю...")
+            tasks = query_notion(NOTION_DATABASE_ID, {
+                "filter": {"and": filters},
+                "sorts": [{"property": "Направление", "direction": "ascending"}]
+            })
+
+            # Формируем заголовок
+            priority_icons = {"🔥 Срочно": "🔥", "⚡ Важно": "⚡", "📌 Обычное": "📌"}
+            icon = priority_icons.get(priority, "📌")
+            title_parts = [f"{icon} *{priority} задачи"]
+            if person:
+                title_parts.append(f" — {person}")
+            if direction:
+                title_parts.append(f" / {direction}")
+            title_parts.append("*")
+            title = "".join(title_parts)
+
+            if not tasks:
+                await msg.reply_text(f"✅ {''.join(title_parts[:-1])}* — нет задач!")
+                return
+
+            lines = [title + "
+"]
+            for task in tasks:
+                t2 = parse_work_task(task)
+                dl = f" · {t2['deadline']}" if t2['deadline'] else ""
+                person_str = f"
+   👤 {t2['responsible']}" if not person else ""
+                dir_str = f" · {DIR_ICONS.get(t2['direction'], '📁')} {t2['direction']}" if not direction else ""
+                lines.append(f"{icon} {t2['name']}{person_str}{dir_str}{dl}")
+            lines.append(f"
+_Всего: {len(tasks)}_")
+            await msg.reply_text("
+".join(lines), parse_mode="Markdown")
 
         elif t == "change_direction":
             task_name = result.get("task_name", "")
