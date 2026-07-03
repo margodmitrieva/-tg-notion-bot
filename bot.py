@@ -65,7 +65,10 @@ SYSTEM_PROMPT = """Ты ассистент, который управляет з
 11. Показать задачи по ПРИОРИТЕТУ (срочные, важные, обычные — можно с фильтром по человеку и/или направлению):
 {"type": "show_priority", "priority": "🔥 Срочно или ⚡ Важно или 📌 Обычное", "person": "имя или null", "direction": "направление или null"}
 
-12. НЕ про задачи:
+12. ЗАКРЫТЬ НЕСКОЛЬКО задач сразу (закрыть:, выполнены:, готово: — перечисление через запятую):
+{"type": "done_many", "tasks": ["название1", "название2", "название3"], "responsible": "имя или Марго"}
+
+13. НЕ про задачи:
 {"type": "skip"}"""
 
 
@@ -371,6 +374,38 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text(f"⏳ Загружаю...")
             tasks = get_personal_by_section(section)
             await msg.reply_text(format_personal_section(tasks, section), parse_mode="Markdown")
+
+        elif t == "done_many":
+            tasks_list = result.get("tasks", [])
+            responsible = result.get("responsible", sender)
+            if not tasks_list:
+                await msg.reply_text("❓ Не поняла какие задачи закрыть. Напиши: «закрыть: задача1, задача2, задача3»")
+                return
+            await msg.reply_text(f"⏳ Закрываю {len(tasks_list)} задач...")
+            done_list = []
+            not_found_list = []
+            for task_name in tasks_list:
+                task_name = task_name.strip()
+                page_id = find_task(task_name)
+                if page_id:
+                    ok = update_task(page_id, "Готово", responsible)
+                    if ok:
+                        done_list.append(task_name)
+                    else:
+                        not_found_list.append(task_name)
+                else:
+                    not_found_list.append(task_name)
+            lines = []
+            if done_list:
+                lines.append(f"✅ *Закрыто ({len(done_list)}):*")
+                for name in done_list:
+                    lines.append(f"· {name}")
+            if not_found_list:
+                lines.append(f"\n❓ *Не нашла ({len(not_found_list)}):*")
+                for name in not_found_list:
+                    lines.append(f"· {name}")
+                lines.append("_Проверь названия — возможно написаны иначе в Notion_")
+            await msg.reply_text("\n".join(lines), parse_mode="Markdown")
 
         elif t == "show_priority":
             priority_map = {
