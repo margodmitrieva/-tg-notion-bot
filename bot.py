@@ -111,7 +111,7 @@ def ask_claude(text, sender):
         headers={"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
         json={
             "model": "claude-sonnet-4-6",
-            "max_tokens": 500,
+            "max_tokens": 1000,
             "system": SYSTEM_PROMPT,
             "messages": [{"role": "user", "content": f"Отправитель: {sender}\nСообщение: {text}"}]
         },
@@ -119,7 +119,15 @@ def ask_claude(text, sender):
     )
     r.raise_for_status()
     raw = r.json()["content"][0]["text"].strip()
+    # Убираем markdown обёртку если есть
+    if raw.startswith("```"):
+        lines = raw.split("\n")
+        lines = [l for l in lines if not l.startswith("```")]
+        raw = "\n".join(lines).strip()
     logger.info(f"Claude raw response: {raw}")
+    if not raw:
+        logger.error("Claude вернул пустой ответ!")
+        return {"type": "skip"}
     return json.loads(raw)
 
 
