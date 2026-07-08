@@ -323,6 +323,7 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         result = ask_claude(msg.text, sender)
         t = result.get("type")
+        logger.info(f"Claude ответил: {result}")
 
         if t == "skip":
             return
