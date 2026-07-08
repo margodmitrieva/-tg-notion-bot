@@ -416,11 +416,12 @@ async def send_evening_reminders(context: ContextTypes.DEFAULT_TYPE):
             text=team_text,
             parse_mode="Markdown"
         )
-        # Напоминание для Андрея
-        andrey_text = "💰 Андрей, нужно внести все платежи в чат ТГ."
+        # Напоминание для Андрея с упоминанием
+        andrey_text = "💰 [Андрей](tg://user?id=5106438154), нужно внести все платежи в чат ТГ."
         await context.bot.send_message(
             chat_id=ALLOWED_CHAT_ID,
-            text=andrey_text
+            text=andrey_text,
+            parse_mode="Markdown"
         )
         logger.info("Вечерние напоминания отправлены")
     except Exception as e:
