@@ -3,9 +3,10 @@ import json
 import logging
 import threading
 import requests
+from datetime import date, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, MessageHandler, filters, ContextTypes, JobQueue
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
@@ -343,6 +344,89 @@ def create_personal_task(name, section="Цели и приоритеты", prior
     )
 
 
+async def send_deadline_reminders(context: ContextTypes.DEFAULT_TYPE):
+    """Утреннее напоминание о задачах с дедлайном сегодня и завтра"""
+    try:
+        today = date.today().isoformat()
+        tomorrow = (date.today() + timedelta(days=1)).isoformat()
+
+        # Ищем задачи с дедлайном сегодня или завтра
+        results = query_notion(NOTION_DATABASE_ID, {
+            "filter": {
+                "and": [
+                    {"property": "Статус", "select": {"not_equals": "Готово"}},
+                    {"property": "Статус", "select": {"not_equals": "Отменено"}},
+                    {"or": [
+                        {"property": "Дедлайн", "date": {"equals": today}},
+                        {"property": "Дедлайн", "date": {"equals": tomorrow}},
+                    ]}
+                ]
+            },
+            "sorts": [{"property": "Дедлайн", "direction": "ascending"}]
+        })
+
+        if not results:
+            return
+
+        today_tasks = []
+        tomorrow_tasks = []
+
+        for task in results:
+            t = parse_work_task(task)
+            if not t["name"]:
+                continue
+            dl = (task["properties"].get("Дедлайн", {}).get("date") or {}).get("start", "")
+            if dl == today:
+                today_tasks.append(t)
+            elif dl == tomorrow:
+                tomorrow_tasks.append(t)
+
+        lines = ["📅 *Напоминание о дедлайнах*\n"]
+
+        if today_tasks:
+            lines.append("🔴 *Сегодня:*")
+            for t in today_tasks:
+                lines.append(f"{t['icon']} {t['name']}\n   👤 {t['responsible']} · {DIR_ICONS.get(t['direction'],'📁')} {t['direction']}")
+            lines.append("")
+
+        if tomorrow_tasks:
+            lines.append("🟡 *Завтра:*")
+            for t in tomorrow_tasks:
+                lines.append(f"{t['icon']} {t['name']}\n   👤 {t['responsible']} · {DIR_ICONS.get(t['direction'],'📁')} {t['direction']}")
+
+        text_to_send = "\n".join(lines)
+        await context.bot.send_message(
+            chat_id=ALLOWED_CHAT_ID,
+            text=text_to_send,
+            parse_mode="Markdown"
+        )
+        logger.info(f"Напоминание отправлено: {len(today_tasks)} сегодня, {len(tomorrow_tasks)} завтра")
+
+    except Exception as e:
+        logger.error(f"Ошибка при отправке напоминания: {e}", exc_info=True)
+
+
+async def send_evening_reminders(context: ContextTypes.DEFAULT_TYPE):
+    """Вечернее напоминание — отметить выполненные задачи и напоминание Андрею"""
+    try:
+        # Напоминание для всей команды
+        team_text = "🌙 *Добрый вечер!*\n\nНе забудьте отметить все выполненные сегодня задачи.\nНапишите: «Выполнила: название задачи»"
+        await context.bot.send_message(
+            chat_id=ALLOWED_CHAT_ID,
+            text=team_text,
+            parse_mode="Markdown"
+        )
+        # Напоминание для Андрея
+        andrey_text = "💰 Андрей, нужно внести все платежи в чат ТГ."
+        await context.bot.send_message(
+            chat_id=ALLOWED_CHAT_ID,
+            text=andrey_text
+        )
+        logger.info("Вечерние напоминания отправлены")
+    except Exception as e:
+        logger.error(f"Ошибка при отправке вечерних напоминаний: {e}", exc_info=True)
+
+
 async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != ALLOWED_CHAT_ID:
         return
@@ -593,7 +677,22 @@ def main():
     logger.info(f"Веб-сервер на порту {PORT}")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT, handle))
-    logger.info("Бот запущен ✅")
+
+    # Напоминания каждый день в 9:00 по московскому времени (UTC+3 = 06:00 UTC)
+    import datetime as dt
+    job_queue = app.job_queue
+    job_queue.run_daily(
+        send_deadline_reminders,
+        time=dt.time(hour=6, minute=0, tzinfo=dt.timezone.utc),
+        name="deadline_reminders"
+    )
+    # Вечернее напоминание в 18:00 МСК (15:00 UTC)
+    job_queue.run_daily(
+        send_evening_reminders,
+        time=dt.time(hour=15, minute=0, tzinfo=dt.timezone.utc),
+        name="evening_reminders"
+    )
+    logger.info("Бот запущен ✅ (утро 9:00 МСК, вечер 18:00 МСК)")
     app.run_polling(drop_pending_updates=True)
 
 
