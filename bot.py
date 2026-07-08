@@ -54,7 +54,7 @@ SYSTEM_PROMPT = """Ты ассистент, который управляет з
 {"type": "done", "task_name": "название", "responsible": "имя", "status": "Готово"}
 
 8. НОВАЯ рабочая задача (задача для команды, добавь задачу Ольге, нужно сделать по АЭлит):
-{"type": "new", "task_name": "название", "responsible": "имя или Марго", "direction": "направление", "priority": "приоритет", "deadline": "YYYY-MM-DD или null"}
+{"type": "new", "task_name": "название", "responsible": "имя или Марго", "direction": "направление", "priority": "приоритет", "deadline": "YYYY-MM-DD или null", "status": "В работе или Ждём или Идея или Готово"}
 
 9. НОВАЯ личная задача (моя задача, добавь в цели, напомни купить, личное):
 {"type": "new_personal", "task_name": "название", "section": "Цели и приоритеты или Семья и быт или Обучение", "priority": "приоритет"}
@@ -510,12 +510,18 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
             direction = result.get("direction", "Общее")
             priority = result.get("priority", "📌 Обычное")
             deadline = result.get("deadline")
+            status = result.get("status", "В работе")
+            valid_statuses = ["В работе", "Ждём", "Идея", "Готово", "Отменено"]
+            if status not in valid_statuses:
+                status = "В работе"
             if deadline == "null":
                 deadline = None
-            create_work_task(name, responsible, direction, priority, deadline=deadline)
+            create_work_task(name, responsible, direction, priority, status=status, deadline=deadline)
             dl_str = f" · 📅 {deadline}" if deadline else ""
+            status_icons = {"В работе": "🔵", "Ждём": "🟡", "Идея": "⚪", "Готово": "✅", "Отменено": "❌"}
+            st_icon = status_icons.get(status, "🔵")
             await msg.reply_text(
-                f"✅ Задача добавлена!\n\n📌 *{name}*\n👤 {responsible} · {direction} · {priority}{dl_str}",
+                f"✅ Задача добавлена!\n\n📌 *{name}*\n👤 {responsible} · {direction} · {priority}\n{st_icon} {status}{dl_str}",
                 parse_mode="Markdown"
             )
 
