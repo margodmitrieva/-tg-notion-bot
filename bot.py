@@ -53,8 +53,11 @@ SYSTEM_PROMPT = """Ты ассистент, который управляет з
 7. ВЫПОЛНЕНИЕ рабочей задачи (выполнила, сделала, готово — про рабочее):
 {"type": "done", "task_name": "название", "responsible": "имя", "status": "Готово"}
 
-8. НОВАЯ рабочая задача (задача для команды, добавь задачу Ольге, нужно сделать по АЭлит):
+8. НОВАЯ рабочая задача (одна задача):
 {"type": "new", "task_name": "название", "responsible": "имя или Марго", "direction": "направление", "priority": "приоритет", "deadline": "YYYY-MM-DD или null", "status": "В работе или Ждём или Идея или Готово"}
+
+8б. НЕСКОЛЬКО НОВЫХ задач сразу (добавить задачи:, список задач, пронумерованный список):
+{"type": "new_many", "tasks": [{"task_name": "название", "responsible": "имя", "direction": "направление", "priority": "приоритет", "deadline": "YYYY-MM-DD или null", "status": "В работе"}, ...]}
 
 9. НОВАЯ личная задача (моя задача, добавь в цели, напомни купить, личное):
 {"type": "new_personal", "task_name": "название", "section": "Цели и приоритеты или Семья и быт или Обучение", "priority": "приоритет"}
@@ -503,6 +506,34 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 create_work_task(name, responsible, status=status)
                 await msg.reply_text(f"✅ Зафиксировано! Создала «{name}» → {status}")
+
+        elif t == "new_many":
+            tasks_list = result.get("tasks", [])
+            if not tasks_list:
+                await msg.reply_text("❓ Не поняла задачи. Напиши каждую с новой строки или пронумеруй.")
+                return
+            await msg.reply_text(f"⏳ Добавляю {len(tasks_list)} задач...")
+            added = []
+            for item in tasks_list:
+                name = item.get("task_name", "").strip()
+                if not name:
+                    continue
+                responsible = item.get("responsible", sender)
+                direction = item.get("direction", "Общее")
+                priority = item.get("priority", "📌 Обычное")
+                deadline = item.get("deadline")
+                status = item.get("status", "В работе")
+                if deadline == "null":
+                    deadline = None
+                valid_statuses = ["В работе", "Ждём", "Идея", "Готово", "Отменено"]
+                if status not in valid_statuses:
+                    status = "В работе"
+                create_work_task(name, responsible, direction, priority, status=status, deadline=deadline)
+                dl_str = f" · 📅 {deadline}" if deadline else ""
+                added.append(f"📌 *{name}*\n   👤 {responsible} · {direction}{dl_str}")
+            lines = [f"✅ Добавлено задач: {len(added)}\n"]
+            lines.extend(added)
+            await msg.reply_text("\n\n".join(lines), parse_mode="Markdown")
 
         elif t == "new":
             name = result.get("task_name", "")
