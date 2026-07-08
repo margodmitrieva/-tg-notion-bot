@@ -54,7 +54,7 @@ SYSTEM_PROMPT = """Ты ассистент, который управляет з
 {"type": "done", "task_name": "название", "responsible": "имя", "status": "Готово"}
 
 8. НОВАЯ рабочая задача (задача для команды, добавь задачу Ольге, нужно сделать по АЭлит):
-{"type": "new", "task_name": "название", "responsible": "имя или Марго", "direction": "направление", "priority": "приоритет"}
+{"type": "new", "task_name": "название", "responsible": "имя или Марго", "direction": "направление", "priority": "приоритет", "deadline": "YYYY-MM-DD или null"}
 
 9. НОВАЯ личная задача (моя задача, добавь в цели, напомни купить, личное):
 {"type": "new_personal", "task_name": "название", "section": "Цели и приоритеты или Семья и быт или Обучение", "priority": "приоритет"}
@@ -509,9 +509,13 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
             responsible = result.get("responsible", sender)
             direction = result.get("direction", "Общее")
             priority = result.get("priority", "📌 Обычное")
-            create_work_task(name, responsible, direction, priority)
+            deadline = result.get("deadline")
+            if deadline == "null":
+                deadline = None
+            create_work_task(name, responsible, direction, priority, deadline=deadline)
+            dl_str = f" · 📅 {deadline}" if deadline else ""
             await msg.reply_text(
-                f"✅ Задача добавлена!\n\n📌 *{name}*\n👤 {responsible} · {direction} · {priority}",
+                f"✅ Задача добавлена!\n\n📌 *{name}*\n👤 {responsible} · {direction} · {priority}{dl_str}",
                 parse_mode="Markdown"
             )
 
