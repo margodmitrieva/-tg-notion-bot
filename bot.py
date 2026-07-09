@@ -35,6 +35,10 @@ show_all — показать все рабочие задачи в работе
 Пример: "покажи все задачи", "что в работе", "задачи"
 {"type": "show_all"}
 
+show_deadlines — показать задачи с дедлайном сегодня и завтра
+Пример: "дедлайны", "покажи дедлайны", "что сегодня по дедлайнам", "напоминание о дедлайнах"
+{"type": "show_deadlines"}
+
 show_person — задачи конкретного человека
 Пример: "задачи Ольги", "что у Марго", "покажи Андрея"
 {"type": "show_person", "person": "Марго"}
@@ -424,6 +428,46 @@ async def send_evening_reminders(context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ошибка при отправке вечерних напоминаний: {e}", exc_info=True)
 
 
+async def send_deadline_reminders_manual(context, chat_id):
+    """Отправка напоминания о дедлайнах по запросу"""
+    from datetime import date, timedelta
+    today = date.today().isoformat()
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    results = query_notion(NOTION_DATABASE_ID, {
+        "filter": {
+            "or": [
+                {"property": "Дедлайн", "date": {"equals": today}},
+                {"property": "Дедлайн", "date": {"equals": tomorrow}},
+            ]
+        },
+        "sorts": [{"property": "Дедлайн", "direction": "ascending"}]
+    })
+    if not results:
+        await context.bot.send_message(chat_id=chat_id, text="✅ Задач с дедлайном сегодня и завтра нет!")
+        return
+    today_tasks, tomorrow_tasks = [], []
+    for task in results:
+        t = parse_work_task(task)
+        if not t["name"]:
+            continue
+        dl = (task["properties"].get("Дедлайн", {}).get("date") or {}).get("start", "")
+        if dl == today:
+            today_tasks.append(t)
+        elif dl == tomorrow:
+            tomorrow_tasks.append(t)
+    lines = ["📅 *Напоминание о дедлайнах*\n"]
+    if today_tasks:
+        lines.append("🔴 *Сегодня:*")
+        for t in today_tasks:
+            lines.append(f"{t['icon']} {t['name']}\n   👤 {t['responsible']} · {DIR_ICONS.get(t['direction'],'📁')} {t['direction']}")
+        lines.append("")
+    if tomorrow_tasks:
+        lines.append("🟡 *Завтра:*")
+        for t in tomorrow_tasks:
+            lines.append(f"{t['icon']} {t['name']}\n   👤 {t['responsible']} · {DIR_ICONS.get(t['direction'],'📁')} {t['direction']}")
+    await context.bot.send_message(chat_id=chat_id, text="\n".join(lines), parse_mode="Markdown")
+
+
 async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != ALLOWED_CHAT_ID:
         return
@@ -441,6 +485,10 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if t == "skip":
             return
+
+        elif t == "show_deadlines":
+            await msg.reply_text("⏳ Проверяю дедлайны...")
+            await send_deadline_reminders_manual(context, msg.chat_id)
 
         elif t == "show_all":
             await msg.reply_text("⏳ Загружаю...")
