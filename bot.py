@@ -428,44 +428,75 @@ async def send_evening_reminders(context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ошибка при отправке вечерних напоминаний: {e}", exc_info=True)
 
 
-async def send_deadline_reminders_manual(context, chat_id):
-    """Отправка напоминания о дедлайнах по запросу"""
+def get_deadline_tasks():
+    """Получаем задачи: просроченные, сегодня, завтра"""
     from datetime import date, timedelta
     today = date.today().isoformat()
     tomorrow = (date.today() + timedelta(days=1)).isoformat()
-    results = query_notion(NOTION_DATABASE_ID, {
+
+    # Просроченные — дедлайн раньше сегодня, статус не Готово и не Отменено
+    overdue = query_notion(NOTION_DATABASE_ID, {
         "filter": {
-            "or": [
-                {"property": "Дедлайн", "date": {"equals": today}},
-                {"property": "Дедлайн", "date": {"equals": tomorrow}},
+            "and": [
+                {"property": "Дедлайн", "date": {"before": today}},
+                {"property": "Статус", "select": {"does_not_equal": "Готово"}},
+                {"property": "Статус", "select": {"does_not_equal": "Отменено"}},
             ]
         },
         "sorts": [{"property": "Дедлайн", "direction": "ascending"}]
     })
-    if not results:
-        await context.bot.send_message(chat_id=chat_id, text="✅ Задач с дедлайном сегодня и завтра нет!")
-        return
-    today_tasks, tomorrow_tasks = [], []
-    for task in results:
-        t = parse_work_task(task)
-        if not t["name"]:
-            continue
-        dl = (task["properties"].get("Дедлайн", {}).get("date") or {}).get("start", "")
-        if dl == today:
-            today_tasks.append(t)
-        elif dl == tomorrow:
-            tomorrow_tasks.append(t)
-    lines = ["📅 *Напоминание о дедлайнах*\n"]
+
+    # Сегодня
+    today_tasks = query_notion(NOTION_DATABASE_ID, {
+        "filter": {"property": "Дедлайн", "date": {"equals": today}},
+        "sorts": [{"property": "Приоритет", "direction": "ascending"}]
+    })
+
+    # Завтра
+    tomorrow_tasks = query_notion(NOTION_DATABASE_ID, {
+        "filter": {"property": "Дедлайн", "date": {"equals": tomorrow}},
+        "sorts": [{"property": "Приоритет", "direction": "ascending"}]
+    })
+
+    return (
+        [parse_work_task(t) for t in overdue if parse_work_task(t)["name"]],
+        [parse_work_task(t) for t in today_tasks if parse_work_task(t)["name"]],
+        [parse_work_task(t) for t in tomorrow_tasks if parse_work_task(t)["name"]]
+    )
+
+
+def format_deadline_message(overdue, today_tasks, tomorrow_tasks):
+    """Форматируем сообщение о дедлайнах"""
+    if not overdue and not today_tasks and not tomorrow_tasks:
+        return "✅ Нет задач с дедлайном — ни просроченных, ни на сегодня, ни на завтра!"
+
+    lines = ["📅 *Дедлайны*\n"]
+
+    if overdue:
+        lines.append("🚨 *Просроченные задачи:*")
+        for t in overdue:
+            lines.append(f"{t['icon']} {t['name']}\n   👤 {t['responsible']} · {DIR_ICONS.get(t['direction'],'📁')} {t['direction']} · 📅 {t['deadline']}")
+        lines.append("")
+
     if today_tasks:
-        lines.append("🔴 *Сегодня:*")
+        lines.append("🔴 *Задачи на сегодня:*")
         for t in today_tasks:
             lines.append(f"{t['icon']} {t['name']}\n   👤 {t['responsible']} · {DIR_ICONS.get(t['direction'],'📁')} {t['direction']}")
         lines.append("")
+
     if tomorrow_tasks:
-        lines.append("🟡 *Завтра:*")
+        lines.append("🟡 *Задачи с дедлайном завтра:*")
         for t in tomorrow_tasks:
             lines.append(f"{t['icon']} {t['name']}\n   👤 {t['responsible']} · {DIR_ICONS.get(t['direction'],'📁')} {t['direction']}")
-    await context.bot.send_message(chat_id=chat_id, text="\n".join(lines), parse_mode="Markdown")
+
+    return "\n".join(lines)
+
+
+async def send_deadline_reminders_manual(context, chat_id):
+    """Отправка напоминания о дедлайнах по запросу"""
+    overdue, today_tasks, tomorrow_tasks = get_deadline_tasks()
+    text = format_deadline_message(overdue, today_tasks, tomorrow_tasks)
+    await context.bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown")
 
 
 async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
