@@ -40,8 +40,12 @@ show_deadlines — показать задачи с дедлайном (прос
 {"type": "show_deadlines", "person": null}
 
 show_deadlines — с фильтром по человеку
-Пример: "дедлайны Андрей", "дедлайны Ольги", "просрочено у Марго"
+Пример: "дедлайны Андрей", "дедлайны Ольги"
 {"type": "show_deadlines", "person": "Андрей"}
+
+show_overdue — только просроченные задачи (без сегодня и завтра)
+Пример: "просрочено", "просроченные задачи", "что просрочено", "просрочено у Галии", "просроченные Андрея"
+{"type": "show_overdue", "person": null}
 
 show_person — задачи конкретного человека
 Пример: "задачи Ольги", "что у Марго", "покажи Андрея"
@@ -530,6 +534,34 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 person = None
             await msg.reply_text("⏳ Проверяю дедлайны...")
             await send_deadline_reminders_manual(context, msg.chat_id, person=person)
+
+        elif t == "show_overdue":
+            person = result.get("person")
+            if not person or person == "null":
+                person = None
+            from datetime import date
+            today = date.today().isoformat()
+            f = {"and": [
+                {"property": "Дедлайн", "date": {"before": today}},
+                {"property": "Статус", "select": {"does_not_equal": "Готово"}},
+                {"property": "Статус", "select": {"does_not_equal": "Отменено"}},
+            ]}
+            if person:
+                f = {"and": [f, {"property": "Ответственный", "select": {"equals": person}}]}
+            tasks = query_notion(NOTION_DATABASE_ID, {
+                "filter": f,
+                "sorts": [{"property": "Дедлайн", "direction": "ascending"}]
+            })
+            overdue = [parse_work_task(t) for t in tasks if parse_work_task(t)["name"]]
+            person_str = f" — {person}" if person else ""
+            if not overdue:
+                await msg.reply_text(f"✅ Просроченных задач нет{person_str}!")
+            else:
+                lines = [f"🚨 *Просроченные задачи{person_str}*\n"]
+                for t in overdue:
+                    lines.append(f"{t['icon']} {t['name']}\n   👤 {t['responsible']} · {DIR_ICONS.get(t['direction'],'📁')} {t['direction']} · 📅 {t['deadline']}")
+                lines.append(f"\n_Всего: {len(overdue)}_")
+                await msg.reply_text("\n".join(lines), parse_mode="Markdown")
 
         elif t == "show_all":
             await msg.reply_text("⏳ Загружаю...")
