@@ -353,13 +353,9 @@ async def send_deadline_reminders(context: ContextTypes.DEFAULT_TYPE):
         # Ищем задачи с дедлайном сегодня или завтра
         results = query_notion(NOTION_DATABASE_ID, {
             "filter": {
-                "and": [
-                    {"property": "Статус", "select": {"not_equals": "Готово"}},
-                    {"property": "Статус", "select": {"not_equals": "Отменено"}},
-                    {"or": [
-                        {"property": "Дедлайн", "date": {"equals": today}},
-                        {"property": "Дедлайн", "date": {"equals": tomorrow}},
-                    ]}
+                "or": [
+                    {"property": "Дедлайн", "date": {"equals": today}},
+                    {"property": "Дедлайн", "date": {"equals": tomorrow}},
                 ]
             },
             "sorts": [{"property": "Дедлайн", "direction": "ascending"}]
