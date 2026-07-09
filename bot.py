@@ -35,9 +35,13 @@ show_all — показать все рабочие задачи в работе
 Пример: "покажи все задачи", "что в работе", "задачи"
 {"type": "show_all"}
 
-show_deadlines — показать задачи с дедлайном сегодня и завтра
-Пример: "дедлайны", "покажи дедлайны", "что сегодня по дедлайнам", "напоминание о дедлайнах"
-{"type": "show_deadlines"}
+show_deadlines — показать задачи с дедлайном (просроченные, сегодня, завтра)
+Пример: "дедлайны", "покажи дедлайны", "что сегодня по дедлайнам"
+{"type": "show_deadlines", "person": null}
+
+show_deadlines — с фильтром по человеку
+Пример: "дедлайны Андрей", "дедлайны Ольги", "просрочено у Марго"
+{"type": "show_deadlines", "person": "Андрей"}
 
 show_person — задачи конкретного человека
 Пример: "задачи Ольги", "что у Марго", "покажи Андрея"
@@ -428,33 +432,35 @@ async def send_evening_reminders(context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ошибка при отправке вечерних напоминаний: {e}", exc_info=True)
 
 
-def get_deadline_tasks():
-    """Получаем задачи: просроченные, сегодня, завтра"""
+def get_deadline_tasks(person=None):
+    """Получаем задачи: просроченные, сегодня, завтра. Опционально — по конкретному человеку."""
     from datetime import date, timedelta
     today = date.today().isoformat()
     tomorrow = (date.today() + timedelta(days=1)).isoformat()
 
-    # Просроченные — дедлайн раньше сегодня, статус не Готово и не Отменено
+    def build_filter(date_filter):
+        if person:
+            return {"and": [date_filter, {"property": "Ответственный", "select": {"equals": person}}]}
+        return date_filter
+
     overdue = query_notion(NOTION_DATABASE_ID, {
-        "filter": {
+        "filter": build_filter({
             "and": [
                 {"property": "Дедлайн", "date": {"before": today}},
                 {"property": "Статус", "select": {"does_not_equal": "Готово"}},
                 {"property": "Статус", "select": {"does_not_equal": "Отменено"}},
             ]
-        },
+        }),
         "sorts": [{"property": "Дедлайн", "direction": "ascending"}]
     })
 
-    # Сегодня
     today_tasks = query_notion(NOTION_DATABASE_ID, {
-        "filter": {"property": "Дедлайн", "date": {"equals": today}},
+        "filter": build_filter({"property": "Дедлайн", "date": {"equals": today}}),
         "sorts": [{"property": "Приоритет", "direction": "ascending"}]
     })
 
-    # Завтра
     tomorrow_tasks = query_notion(NOTION_DATABASE_ID, {
-        "filter": {"property": "Дедлайн", "date": {"equals": tomorrow}},
+        "filter": build_filter({"property": "Дедлайн", "date": {"equals": tomorrow}}),
         "sorts": [{"property": "Приоритет", "direction": "ascending"}]
     })
 
@@ -465,12 +471,13 @@ def get_deadline_tasks():
     )
 
 
-def format_deadline_message(overdue, today_tasks, tomorrow_tasks):
+def format_deadline_message(overdue, today_tasks, tomorrow_tasks, person=None):
     """Форматируем сообщение о дедлайнах"""
+    person_str = f" — {person}" if person else ""
     if not overdue and not today_tasks and not tomorrow_tasks:
-        return "✅ Нет задач с дедлайном — ни просроченных, ни на сегодня, ни на завтра!"
+        return f"✅ Нет задач с дедлайном{person_str}!"
 
-    lines = ["📅 *Дедлайны*\n"]
+    lines = [f"📅 *Дедлайны{person_str}*\n"]
 
     if overdue:
         lines.append("🚨 *Просроченные задачи:*")
@@ -492,10 +499,10 @@ def format_deadline_message(overdue, today_tasks, tomorrow_tasks):
     return "\n".join(lines)
 
 
-async def send_deadline_reminders_manual(context, chat_id):
+async def send_deadline_reminders_manual(context, chat_id, person=None):
     """Отправка напоминания о дедлайнах по запросу"""
-    overdue, today_tasks, tomorrow_tasks = get_deadline_tasks()
-    text = format_deadline_message(overdue, today_tasks, tomorrow_tasks)
+    overdue, today_tasks, tomorrow_tasks = get_deadline_tasks(person=person)
+    text = format_deadline_message(overdue, today_tasks, tomorrow_tasks, person=person)
     await context.bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown")
 
 
@@ -518,8 +525,11 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         elif t == "show_deadlines":
+            person = result.get("person")
+            if person == "null" or person == "":
+                person = None
             await msg.reply_text("⏳ Проверяю дедлайны...")
-            await send_deadline_reminders_manual(context, msg.chat_id)
+            await send_deadline_reminders_manual(context, msg.chat_id, person=person)
 
         elif t == "show_all":
             await msg.reply_text("⏳ Загружаю...")
