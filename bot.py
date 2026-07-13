@@ -47,6 +47,10 @@ show_overdue — только просроченные задачи (без се
 Пример: "просрочено", "просроченные задачи", "что просрочено", "просрочено у Галии", "просроченные Андрея"
 {"type": "show_overdue", "person": null}
 
+show_ideas — задачи со статусом Идея (можно с фильтром по человеку и/или направлению)
+Пример: "идеи", "все идеи", "идеи Марго", "идеи по АЭлит", "идеи Галии по Контенту"
+{"type": "show_ideas", "person": null, "direction": null}
+
 show_person — задачи конкретного человека
 Пример: "задачи Ольги", "что у Марго", "покажи Андрея"
 {"type": "show_person", "person": "Марго"}
@@ -566,6 +570,47 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 for t in overdue:
                     lines.append(f"{t['icon']} {t['name']}\n   👤 {t['responsible']} · {DIR_ICONS.get(t['direction'],'📁')} {t['direction']} · 📅 {t['deadline']}")
                 lines.append(f"\n_Всего: {len(overdue)}_")
+                await msg.reply_text("\n".join(lines), parse_mode="Markdown")
+
+        elif t == "show_ideas":
+            person = result.get("person")
+            direction = result.get("direction")
+            if not person or person == "null":
+                person = None
+            if not direction or direction == "null":
+                direction = None
+            filters = [{"property": "Статус", "select": {"equals": "Идея"}}]
+            if person:
+                filters.append({"property": "Ответственный", "select": {"equals": person}})
+            if direction:
+                filters.append({"property": "Направление", "select": {"equals": direction}})
+            f = filters[0] if len(filters) == 1 else {"and": filters}
+            tasks = query_notion(NOTION_DATABASE_ID, {
+                "filter": f,
+                "sorts": [{"property": "Направление", "direction": "ascending"}]
+            })
+            ideas = [parse_work_task(t) for t in tasks if parse_work_task(t)["name"]]
+            parts = []
+            if person:
+                parts.append(person)
+            if direction:
+                parts.append(direction)
+            suffix = " — " + " / ".join(parts) if parts else ""
+            if not ideas:
+                await msg.reply_text(f"💡 Идей пока нет{suffix}!")
+            else:
+                lines = [f"💡 *Идеи{suffix}*\n"]
+                by_dir = {}
+                for t in ideas:
+                    by_dir.setdefault(t["direction"], []).append(t)
+                for d, items in by_dir.items():
+                    if not direction:
+                        lines.append(f"{DIR_ICONS.get(d,'📁')} *{d}*")
+                    for t in items:
+                        person_str = f"\n   👤 {t['responsible']}" if not person else ""
+                        lines.append(f"💡 {t['name']}{person_str}")
+                    lines.append("")
+                lines.append(f"_Всего: {len(ideas)}_")
                 await msg.reply_text("\n".join(lines), parse_mode="Markdown")
 
         elif t == "show_all":
