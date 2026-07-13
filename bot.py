@@ -67,9 +67,13 @@ show_priority — задачи по приоритету (можно с филь
 Пример: "срочные задачи", "важные задачи Галии", "срочное по АЭлит"
 {"type": "show_priority", "priority": "🔥 Срочно", "person": null, "direction": null}
 
-show_personal_all — все личные задачи Марго
-Пример: "мои задачи", "личные задачи", "что у меня"
+show_personal_all — все личные задачи Марго (только если отправитель Марго)
+Пример: "мои личные задачи", "личные задачи", "мои цели"
 {"type": "show_personal_all"}
+
+show_my_work — рабочие задачи отправителя (используй когда пишут "мои задачи", "что у меня", "мои дела" — подставь имя отправителя)
+Пример: "мои задачи" от Галии → person: Галия; "что у меня" от Андрея → person: Андрей
+{"type": "show_my_work", "person": "имя отправителя из поля Отправитель"}
 
 show_personal_section — личные задачи по разделу
 Пример: "мои цели", "семья", "обучение"
@@ -165,13 +169,21 @@ def get_all_tasks():
     })
 
 def get_tasks_by_person(name):
-    return query_notion(NOTION_DATABASE_ID, {
+    results = query_notion(NOTION_DATABASE_ID, {
         "filter": {"and": [
             {"property": "Статус", "select": {"equals": "В работе"}},
             {"property": "Ответственный", "select": {"equals": name}}
         ]},
-        "sorts": [{"property": "Приоритет", "direction": "ascending"}]
+        "sorts": [{"property": "Направление", "direction": "ascending"}, {"property": "Приоритет", "direction": "ascending"}]
     })
+    logger.info(f"get_tasks_by_person({name}): найдено {len(results)} задач")
+    for r in results:
+        props = r["properties"]
+        task_name = props.get("Задача", {}).get("title", [{}])
+        task_name = task_name[0]["text"]["content"] if task_name else ""
+        direction = (props.get("Направление", {}).get("select") or {}).get("name", "—")
+        logger.info(f"  - {task_name} | {direction}")
+    return results
 
 def get_tasks_by_direction(direction):
     return query_notion(NOTION_DATABASE_ID, {
@@ -695,6 +707,17 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 lines.append(f"{p_icon} {t2['name']}{person_str}{dir_str}{dl}")
             lines.append(f"\n_Всего: {len(tasks)}_")
             await msg.reply_text("\n".join(lines), parse_mode="Markdown")
+
+        elif t == "show_my_work":
+            name = result.get("person", sender).strip().capitalize()
+            if name not in ["Марго", "Галия", "Ольга", "Андрей"]:
+                name = sender.strip().capitalize()
+            if name not in ["Марго", "Галия", "Ольга", "Андрей"]:
+                await msg.reply_text("❓ Не могу определить кто ты. Напиши «задачи Галии» явно.")
+                return
+            await msg.reply_text(f"⏳ Загружаю твои задачи...")
+            tasks = get_tasks_by_person(name)
+            await msg.reply_text(fmt_person(tasks, name), parse_mode="Markdown")
 
         elif t == "show_personal_all":
             await msg.reply_text("⏳ Загружаю личные задачи...")
