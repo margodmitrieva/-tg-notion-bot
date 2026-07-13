@@ -443,9 +443,12 @@ def get_deadline_tasks(person=None):
     tomorrow = (date.today() + timedelta(days=1)).isoformat()
 
     def build_filter(date_filter):
+        filters = [date_filter]
         if person:
-            return {"and": [date_filter, {"property": "Ответственный", "select": {"equals": person}}]}
-        return date_filter
+            filters.append({"property": "Ответственный", "select": {"equals": person}})
+        if len(filters) == 1:
+            return filters[0]
+        return {"and": filters}
 
     overdue = query_notion(NOTION_DATABASE_ID, {
         "filter": build_filter({
@@ -541,13 +544,14 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 person = None
             from datetime import date
             today = date.today().isoformat()
-            f = {"and": [
+            base = [
                 {"property": "Дедлайн", "date": {"before": today}},
                 {"property": "Статус", "select": {"does_not_equal": "Готово"}},
                 {"property": "Статус", "select": {"does_not_equal": "Отменено"}},
-            ]}
+            ]
             if person:
-                f = {"and": [f, {"property": "Ответственный", "select": {"equals": person}}]}
+                base.append({"property": "Ответственный", "select": {"equals": person}})
+            f = {"and": base}
             tasks = query_notion(NOTION_DATABASE_ID, {
                 "filter": f,
                 "sorts": [{"property": "Дедлайн", "direction": "ascending"}]
