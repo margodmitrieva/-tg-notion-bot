@@ -795,27 +795,34 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
+    import datetime as dt
+    import time as time_module
+
     threading.Thread(target=start_web, daemon=True).start()
     logger.info(f"Веб-сервер на порту {PORT}")
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(MessageHandler(filters.TEXT, handle))
 
-    # Напоминания каждый день в 9:00 по московскому времени (UTC+3 = 06:00 UTC)
-    import datetime as dt
-    job_queue = app.job_queue
-    job_queue.run_daily(
-        send_deadline_reminders,
-        time=dt.time(hour=6, minute=0, tzinfo=dt.timezone.utc),
-        name="deadline_reminders"
-    )
-    # Вечернее напоминание в 18:00 МСК (15:00 UTC)
-    job_queue.run_daily(
-        send_evening_reminders,
-        time=dt.time(hour=15, minute=0, tzinfo=dt.timezone.utc),
-        name="evening_reminders"
-    )
-    logger.info("Бот запущен ✅ (утро 9:00 МСК, вечер 18:00 МСК)")
-    app.run_polling(drop_pending_updates=True)
+    while True:
+        try:
+            app = Application.builder().token(TELEGRAM_TOKEN).build()
+            app.add_handler(MessageHandler(filters.TEXT, handle))
+
+            job_queue = app.job_queue
+            job_queue.run_daily(
+                send_deadline_reminders,
+                time=dt.time(hour=6, minute=0, tzinfo=dt.timezone.utc),
+                name="deadline_reminders"
+            )
+            job_queue.run_daily(
+                send_evening_reminders,
+                time=dt.time(hour=15, minute=0, tzinfo=dt.timezone.utc),
+                name="evening_reminders"
+            )
+            logger.info("Бот запущен ✅ (утро 9:00 МСК, вечер 18:00 МСК)")
+            app.run_polling(drop_pending_updates=True, allowed_updates=["message"])
+            break
+        except Exception as e:
+            logger.error(f"Ошибка запуска, перезапуск через 30 сек: {e}")
+            time_module.sleep(30)
 
 
 if __name__ == "__main__":
