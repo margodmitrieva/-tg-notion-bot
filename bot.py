@@ -325,6 +325,9 @@ def update_task(page_id, status, responsible):
     return r.status_code == 200
 
 def create_work_task(name, responsible, direction="Общее", priority="📌 Обычное", status="В работе", deadline=None):
+    # Андрей по умолчанию всегда в АЭлит
+    if responsible == "Андрей" and direction == "Общее":
+        direction = "АЭлит"
     props = {
         "Задача": {"title": [{"text": {"content": name}}]},
         "Статус": {"select": {"name": status}},
@@ -765,6 +768,29 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"✅ Личная задача добавлена!\n\n{icon} *{name}*\n{section} · {priority}",
                 parse_mode="Markdown"
             )
+
+        elif t == "change_responsible":
+            task_name = result.get("task_name", "")
+            new_responsible = result.get("new_responsible", "").strip().capitalize()
+            valid = ["Марго", "Галия", "Ольга", "Андрей"]
+            if new_responsible not in valid:
+                await msg.reply_text(f"❓ Не знаю такого человека. Доступные: {', '.join(valid)}")
+                return
+            page_id = find_task(task_name)
+            if page_id:
+                r = requests.patch(
+                    f"https://api.notion.com/v1/pages/{page_id}",
+                    headers={"Authorization": f"Bearer {NOTION_TOKEN}", "Notion-Version": "2022-06-28", "Content-Type": "application/json"},
+                    json={"properties": {"Ответственный": {"select": {"name": new_responsible}}}},
+                    timeout=15
+                )
+                if r.status_code == 200:
+                    icon = PERSON_ICONS.get(new_responsible, "👤")
+                    await msg.reply_text(f"✅ Готово! Задача «{task_name}» теперь у {icon} {new_responsible}")
+                else:
+                    await msg.reply_text("⚠️ Не смогла обновить ответственного.")
+            else:
+                await msg.reply_text(f"❓ Не нашла задачу «{task_name}». Проверь название.")
 
         elif t == "change_direction":
             task_name = result.get("task_name", "")
