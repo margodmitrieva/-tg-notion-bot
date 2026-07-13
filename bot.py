@@ -454,8 +454,7 @@ def get_deadline_tasks(person=None):
         "filter": build_filter({
             "and": [
                 {"property": "Дедлайн", "date": {"before": today}},
-                {"property": "Статус", "select": {"is_not": "Готово"}},
-                {"property": "Статус", "select": {"is_not": "Отменено"}},
+                {"property": "Статус", "select": {"equals": "В работе"}},
             ]
         }),
         "sorts": [{"property": "Дедлайн", "direction": "ascending"}]
@@ -546,8 +545,7 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
             today = date.today().isoformat()
             base = [
                 {"property": "Дедлайн", "date": {"before": today}},
-                {"property": "Статус", "select": {"is_not": "Готово"}},
-                {"property": "Статус", "select": {"is_not": "Отменено"}},
+                {"property": "Статус", "select": {"equals": "В работе"}},
             ]
             if person:
                 base.append({"property": "Ответственный", "select": {"equals": person}})
