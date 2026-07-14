@@ -886,6 +886,23 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ошибка: {e}", exc_info=True)
 
 
+async def post_init(app):
+    """После старта — проверяем не пропустили ли утреннее напоминание"""
+    import datetime as dt
+    now_utc = dt.datetime.now(dt.timezone.utc)
+    # Если сейчас между 06:00 и 09:00 UTC (9:00-12:00 МСК) — отправляем напоминание
+    if 8 <= now_utc.hour < 11:
+        logger.info("Запуск после 08:00 UTC — отправляю пропущенное утреннее напоминание")
+        try:
+            overdue, today_tasks, tomorrow_tasks = get_deadline_tasks()
+            if overdue or today_tasks or tomorrow_tasks:
+                text = format_deadline_message(overdue, today_tasks, tomorrow_tasks)
+                await app.bot.send_message(chat_id=ALLOWED_CHAT_ID, text=text, parse_mode="Markdown")
+                logger.info("Пропущенное напоминание отправлено")
+        except Exception as e:
+            logger.error(f"Ошибка при отправке пропущенного напоминания: {e}")
+
+
 def main():
     import datetime as dt
     import time as time_module
@@ -895,13 +912,13 @@ def main():
 
     while True:
         try:
-            app = Application.builder().token(TELEGRAM_TOKEN).build()
+            app = Application.builder().token(TELEGRAM_TOKEN).post_init(post_init).build()
             app.add_handler(MessageHandler(filters.TEXT, handle))
 
             job_queue = app.job_queue
             job_queue.run_daily(
                 send_deadline_reminders,
-                time=dt.time(hour=6, minute=0, tzinfo=dt.timezone.utc),
+                time=dt.time(hour=8, minute=0, tzinfo=dt.timezone.utc),
                 name="deadline_reminders"
             )
             job_queue.run_daily(
@@ -909,7 +926,7 @@ def main():
                 time=dt.time(hour=15, minute=0, tzinfo=dt.timezone.utc),
                 name="evening_reminders"
             )
-            logger.info("Бот запущен ✅ (утро 9:00 МСК, вечер 18:00 МСК)")
+            logger.info("Бот запущен ✅ (утро 11:00 МСК, вечер 18:00 МСК)")
             app.run_polling(drop_pending_updates=True, allowed_updates=["message"])
             break
         except Exception as e:
