@@ -341,8 +341,8 @@ def update_task(page_id, status, responsible):
     return r.status_code == 200
 
 def create_work_task(name, responsible, direction="Общее", priority="📌 Обычное", status="В работе", deadline=None):
-    # Андрей по умолчанию всегда в АЭлит
-    if responsible == "Андрей" and direction == "Общее":
+    # Андрей всегда в АЭлит
+    if responsible == "Андрей":
         direction = "АЭлит"
     props = {
         "Задача": {"title": [{"text": {"content": name}}]},
