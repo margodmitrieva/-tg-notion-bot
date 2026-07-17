@@ -17,6 +17,7 @@ NOTION_DATABASE_ID        = os.environ["NOTION_DATABASE_ID"]
 NOTION_PERSONAL_DB_ID     = os.environ["NOTION_PERSONAL_DATABASE_ID"]
 ALLOWED_CHAT_ID           = int(os.environ["ALLOWED_CHAT_ID"])
 ANDREY_TG_ID              = 5106438154
+MARGO_TG_ID               = 263775863
 PORT                      = int(os.environ.get("PORT", 8080))
 
 logging.basicConfig(level=logging.INFO)
@@ -419,6 +420,15 @@ async def send_evening_reminder(context):
     except Exception as e:
         logger.error(f"Ошибка вечернего напоминания: {e}", exc_info=True)
 
+async def send_margo_evening_reminder(context):
+    try:
+        text = f"[Марго](tg://user?id={MARGO_TG_ID}), не забудьте прислать скрин выписки из банка за сегодня с комментариями, если требуются. 🫶"
+        await context.bot.send_message(chat_id=ALLOWED_CHAT_ID, text=text, parse_mode="Markdown")
+        logger.info("Напоминание Марго о выписке отправлено")
+    except Exception as e:
+        logger.error(f"Ошибка напоминания Марго: {e}", exc_info=True)
+
+
 async def post_init(app):
     """При старте — проверяем не пропустили ли утреннее напоминание."""
     from datetime import datetime
@@ -733,8 +743,11 @@ def main():
             jq.run_daily(send_evening_reminder,
                          time=time(hour=15, minute=0, tzinfo=timezone.utc),
                          name="evening")
+            jq.run_daily(send_margo_evening_reminder,
+                         time=time(hour=17, minute=0, tzinfo=timezone.utc),
+                         name="margo_bank")
 
-            logger.info("Бот запущен ✅  (утро 11:00 МСК, вечер 18:00 МСК)")
+            logger.info("Бот запущен ✅  (утро 11:00 МСК, вечер 18:00 МСК, Марго 20:00 МСК)")
             app.run_polling(drop_pending_updates=True, allowed_updates=["message"])
             break
         except Exception as e:
